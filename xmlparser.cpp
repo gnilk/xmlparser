@@ -328,6 +328,24 @@ std::string Tag::toString() {
   return std::string(name + " ("+content+")");
 }
 
+bool Tag::hasAttribute(std::string name) {
+  std::list<IAttribute *>::iterator it = attributes.begin();
+  for(;it != attributes.end();it++) {
+    IAttribute *pAttribute = *it;
+    if (pAttribute->getName() == name) return true;
+  }
+  return false;
+}
+
+std::string Tag::getAttributeValue(std::string name, std::string defValue) {
+  std::list<IAttribute *>::iterator it = attributes.begin();
+  for(;it != attributes.end();it++) {
+    IAttribute *pAttribute = *it;
+    if (pAttribute->getName() == name) return pAttribute->getValue();
+  }
+  return defValue;
+}
+
 
 // -- Document container
 Document::Document() {

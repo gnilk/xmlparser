@@ -110,6 +110,10 @@ namespace gnilk {
 
       virtual std::string toString() = 0;
 
+      virtual bool hasAttribute(std::string name) = 0;
+      virtual std::string getAttributeValue(std::string name, std::string defValue) = 0;
+
+
       virtual std::list<IAttribute *> &getAttributes() = 0;
       virtual std::list<ITag *> &getChildren() = 0;
     };
@@ -168,10 +172,14 @@ namespace gnilk {
       virtual std::string &getContent() { return content; }
       void setContent(std::string &_content) { content = _content; }
 
+      bool hasAttribute(std::string name);
+      std::string getAttributeValue(std::string name, std::string defValue);
+
 
       virtual std::list<IAttribute *> &getAttributes() { return attributes; }
       virtual std::list<ITag *> &getChildren() { return children; }
     };
+
 
     // Document container
     // - TODO: Keep <?xml > strings in separate tag lists
@@ -193,7 +201,6 @@ namespace gnilk {
     };
 
     enum kParseState {
-      psUnknown,
       psConsume,
       psTagStart,
       psEndTagStart,
