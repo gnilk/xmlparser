@@ -22,6 +22,7 @@ TODO: [ -:Not done, +:In progress, !:Completed]
 #include <string>
 #include <list>
 #include <stack>
+#include <functional>
 
 namespace gnilk {
   namespace xml {
@@ -116,13 +117,19 @@ namespace gnilk {
 
       virtual std::list<IAttribute *> &getAttributes() = 0;
       virtual std::list<ITag *> &getChildren() = 0;
+      virtual ITag *getParent() = 0;
+      virtual ITag *getFirstChild(std::string name) = 0;
+      virtual ITag *getChildWithAttributeValue(std::string name, std::string attribute, std::string value) = 0;
     };
+
+    typedef std::function<void(ITag *tag, std::list<IAttribute *>&attributes)> OnTagDelegate;
 
     class IDocument {
     public:
       virtual ITag *getRoot() = 0;
+      virtual void traverse(OnTagDelegate startHandler, OnTagDelegate endHandler) = 0;
+      virtual void traverseFromNode(ITag *node, OnTagDelegate startHandler, OnTagDelegate endHandler) = 0;      
     };
-
 
     class IParseEvents
     {
@@ -156,6 +163,7 @@ namespace gnilk {
 
       std::list<IAttribute *> attributes;
       std::list<ITag *>children;
+      Tag *parent;
     public:
       Tag(std::string _name);
       virtual ~Tag();
@@ -165,6 +173,9 @@ namespace gnilk {
 
       void addAttribute(std::string _name, std::string _value);
       void addChild(Tag *tag);
+
+      void setParent(Tag *tag);
+      ITag *getParent();
 
       virtual std::string &getName() { return name; }
       void setName(std::string &_name) { name = _name; }
@@ -178,12 +189,14 @@ namespace gnilk {
 
       virtual std::list<IAttribute *> &getAttributes() { return attributes; }
       virtual std::list<ITag *> &getChildren() { return children; }
+      virtual ITag *getFirstChild(std::string name);
+      virtual ITag *getChildWithAttributeValue(std::string name, std::string attribute, std::string value);
     };
 
 
     // Document container
     // - TODO: Keep <?xml > strings in separate tag lists
-    class Document {
+    class Document : public IDocument {
       Tag *root;
 
     public:
@@ -192,12 +205,39 @@ namespace gnilk {
 
       //public std::string &getData() { return data; };
       virtual ITag *getRoot() { return root; };
+      virtual void traverse(OnTagDelegate startHandler, OnTagDelegate endHandler);
+      virtual void traverseFromNode(ITag *node, OnTagDelegate startHandler, OnTagDelegate endHandler);
       void setRoot(Tag *pRoot) { root = pRoot; }
       void dumpTagTree(ITag *root, int depth);
 
 
     private:
+      // OnTagDelegate startHandler;
+      // OnTagDelegate endHandler;
+
+      void traverseNodes(OnTagDelegate startHandler, OnTagDelegate endHandler, std::list<ITag *> &tags);
       std::string indentString(int depth);
+    };
+
+    //
+    // TODO: Break this out to 'xmlutils.h/cpp'
+    //
+    #define DOCPATH_DEFAULT_SEPARATOR (".")
+
+    class DocPath {
+    public:
+      DocPath();
+      DocPath(std::string separator);
+
+      ITag *findFirst(Document *doc, std::string tag, std::string value);
+    private:
+      void onDefinitionTagDataStart(ITag *tag, std::list<IAttribute *>&attributes);
+      void onDefinitionTagDataEnd(ITag *tag, std::list<IAttribute *>&attributes);
+ 
+      std::string pathSeparator;
+      ITag *findResult;
+      std::string searchTag;
+      std::string searchValue;
     };
 
     enum kParseState {
@@ -210,6 +250,7 @@ namespace gnilk {
       psTagHeader,
       psCommentStart,
       psCommentConsume,
+      psDocType,
     };
     enum kParseMode {
       pmStream,
@@ -304,6 +345,7 @@ namespace gnilk {
       __inline void stateAttributeName(char c);
       __inline void stateAttributeValue(char c);
       __inline void stateTagContent(char c);
+      __inline void stateDTDDocTypeContent(char c);
     };
 
 
@@ -384,6 +426,11 @@ namespace gnilk {
       virtual void enter();
       virtual void consume(char c);
     };
+    class StateTagDTDDocType: public ParseStateImpl {
+    public:
+      virtual void enter();
+      virtual void consume(char c);
+    };
 
 
     class ParseStateClasses : public Parser {
@@ -398,6 +445,7 @@ namespace gnilk {
       StateAttributeName stateAttributeName;
       StateAttributeValue stateAttributeValue;
       StateTagContent stateTagContent;
+      StateTagDTDDocType stateTagDTDDocType;
     public:
       ParseStateClasses(std::string _data, IParseEvents *pEventHandler);
       virtual void changeState(kParseState newState);

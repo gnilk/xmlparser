@@ -19,6 +19,8 @@ TODO: [ -:Not done, +:In progress, !:Completed]
 </pre>
 
 \History
+- 03.03.2016, FKling, Addded DOCTYPE to all other calling convention use cases
+- 01.03.2016, FKling, Fixed DOCTYPE tag when using DTD's
 - 10.03.2012, FKling, Implementation in Java, converted to C++ not long after
 
 ---------------------------------------------------------------------------*/
@@ -83,6 +85,8 @@ int Parser::peekNextChar() {
 }
 
 void Parser::changeState(kParseState newState) {
+
+  //printf("changeState: %d -> %d\n",state, newState);
   oldState = state;
   state = newState;
   enterNewState();
@@ -179,10 +183,12 @@ void Parser::parseData() {
       if ((c == '-') && (peekNextChar()=='-')) {
         nextChar();
         changeState(psCommentConsume);
+      } else if ((c == 'D') && (peekNextChar()=='O')) {
+        changeState(psDocType);
       } else {
-#ifdef _DEBUG
+//#ifdef _DEBUG
         printf("Warning: Illegal start of tag, expected start of comment ('<!--') but found found '<!-'\n");
-#endif
+//#endif
         // TODO: If strict, abort here!
         rewind();   // rewind '-'
         rewind();   // rewind '!'
@@ -279,6 +285,7 @@ void Parser::parseData() {
         attrValue = token;
         tagCurrent->addAttribute(attrName, attrValue);
         changeState(psTagAttributeName);
+        token = "";         
       } else {
         token +=c;
       }
@@ -293,6 +300,12 @@ void Parser::parseData() {
         token += c;
       }
       break;
+    case psDocType:
+      if (c == '>') {
+          token = "";
+          changeState(psConsume);
+      }
+      break;
     } // switch
   } // while (!eof)
 } // parseData
@@ -301,6 +314,7 @@ void Parser::parseData() {
 Tag::Tag(std::string _name) {
   setName(_name);
   content.clear();
+  parent = NULL;
 }
 
 Tag::~Tag() {
@@ -311,11 +325,21 @@ void Tag::addAttribute(std::string _name, std::string _value) {
   Attribute *attr = new Attribute();
   attr->setName(_name);
   attr->setValue(_value);
+  //printf("AddAttr: '%s' : '%s'\n",_name.c_str(), _value.c_str());
   attributes.push_back(attr);
 }
 
 void Tag::addChild(Tag *tag) {
   getChildren().push_back(tag);
+  tag->setParent(this);
+}
+
+void Tag::setParent(Tag *tag) {
+  parent = tag;
+}
+
+ITag *Tag::getParent() {
+  return parent;
 }
 
 
@@ -332,7 +356,7 @@ bool Tag::hasAttribute(std::string name) {
   std::list<IAttribute *>::iterator it = attributes.begin();
   for(;it != attributes.end();it++) {
     IAttribute *pAttribute = *it;
-    if (pAttribute->getName() == name) return true;
+    if (!strcmp(pAttribute->getName().c_str(), name.c_str())) return true;
   }
   return false;
 }
@@ -341,11 +365,38 @@ std::string Tag::getAttributeValue(std::string name, std::string defValue) {
   std::list<IAttribute *>::iterator it = attributes.begin();
   for(;it != attributes.end();it++) {
     IAttribute *pAttribute = *it;
-    if (pAttribute->getName() == name) return pAttribute->getValue();
+    //printf("attr: %s\n",pAttribute->getName().c_str());
+    if (!strcmp(pAttribute->getName().c_str(), name.c_str())) return pAttribute->getValue();
   }
   return defValue;
 }
 
+ITag *Tag::getFirstChild(std::string name) {
+  std::list<ITag *>::iterator it = children.begin();
+  for(;it != children.end(); it++) {
+    ITag *child = *it;
+    if (!strcmp(child->getName().c_str(), name.c_str())) return child;
+  }
+  return NULL;
+}
+
+ITag *Tag::getChildWithAttributeValue(std::string name, std::string attribute, std::string value) {
+  std::list<ITag *>::iterator it = children.begin();
+  for(;it != children.end(); it++) {
+    ITag *child = *it;
+ 
+    if (!strcmp(child->getName().c_str(), name.c_str())) {
+
+      if (child->hasAttribute(attribute)) {
+        std::string chval = child->getAttributeValue(attribute,"");
+        if (!strcmp(chval.c_str(), value.c_str())) {
+          return child;
+        }
+      }
+    }
+  }
+  return NULL;
+}
 
 // -- Document container
 Document::Document() {
@@ -354,6 +405,26 @@ Document::Document() {
 
 Document::~Document() {
 
+}
+
+void Document::traverse(OnTagDelegate startHandler, OnTagDelegate endHandler) {
+  traverseNodes(startHandler, endHandler, root->getChildren());
+}
+
+void Document::traverseFromNode(ITag *node, OnTagDelegate startHandler, OnTagDelegate endHandler) {
+  traverseNodes(startHandler, endHandler, node->getChildren());
+}
+
+
+void Document::traverseNodes(OnTagDelegate startHandler, OnTagDelegate endHandler, std::list<ITag *> &tags) {
+  std::list<ITag *>::iterator it = tags.begin();
+  while(it != tags.end()) {
+    ITag *tag = *it;
+    startHandler(tag, tag->getAttributes());
+    traverseNodes(startHandler, endHandler, tag->getChildren());
+    endHandler(tag, tag->getAttributes());
+    it++;
+  }
 }
 
 std::string Document::indentString(int depth) {
@@ -377,6 +448,38 @@ void Document::dumpTagTree(ITag *root, int depth) {
   }		
 }
 
+
+DocPath::DocPath() {
+  pathSeparator = DOCPATH_DEFAULT_SEPARATOR;
+}
+
+DocPath::DocPath(std::string separator) {
+  pathSeparator = separator;
+}
+
+ITag *DocPath::findFirst(Document *doc, std::string tag, std::string value) {
+  searchTag = tag;
+  searchValue = value;
+  findResult = NULL;
+
+  doc->traverse(
+    std::bind(&DocPath::onDefinitionTagDataStart,this, std::placeholders::_1, std::placeholders::_2),
+    std::bind(&DocPath::onDefinitionTagDataEnd,this, std::placeholders::_1, std::placeholders::_2));
+  return findResult;
+}
+
+// call back from XML Parser
+void DocPath::onDefinitionTagDataStart(ITag *tag, std::list<IAttribute *>&attributes) {
+  if (findResult != NULL) return;
+  if (tag->getName() != searchTag) return;
+  if (tag->getContent() != searchValue) return;
+
+  printf("assign find result, %s:%s\n",tag->getName().c_str(), tag->getContent().c_str());
+  findResult = tag;
+}
+
+void DocPath::onDefinitionTagDataEnd(ITag *tag, std::list<IAttribute *>&attributes) {
+}
 
 
 
@@ -554,9 +657,15 @@ void ParseStateFunc::stateCommentConsume(char c) {
       nextChar();
       changeState(psConsume);
     }
+  } else if ((c == 'D') && (peekNextChar()=='O')) {
+    changeState(psDocType);
   } else if (c=='-') {
     token="-";  // Store this in order to track -->
   }
+
+  // } else if (c=='-') {
+  //   token="-";  // Store this in order to track -->
+  // }
 }
 
 void ParseStateFunc::stateAttributeName(char c) {
@@ -597,6 +706,7 @@ void ParseStateFunc::stateAttributeValue(char c) {
     attrValue = token;
     tagCurrent->addAttribute(attrName, attrValue);
     changeState(psTagAttributeName);
+    token="";
   } else {
     token +=c;
   }
@@ -610,6 +720,13 @@ void ParseStateFunc::stateTagContent(char c) {
     rewind();	// rewind so we will see tag start next time
   } else {
     token += c;
+  }
+}
+
+void ParseStateFunc::stateDTDDocTypeContent(char c) {
+  if (c == '>') {
+    token = "";
+    changeState(psConsume);
   }
 }
 
@@ -645,6 +762,9 @@ void ParseStateFunc::parseData() {
       break;
     case psTagContent:
       stateTagContent(c);
+      break;
+    case psDocType:
+      stateDTDDocTypeContent(c);
       break;
     }
   }
@@ -795,6 +915,8 @@ void StateCommentConsume::consume(char c) {
       nextChar();
       changeState(psConsume);
     }
+  } else if ((c == 'D') && (peekNextChar()=='O')) {
+    changeState(psDocType);
   } else if (c=='-') {
     token="-";  // Store this in order to track -->
   }
@@ -802,11 +924,12 @@ void StateCommentConsume::consume(char c) {
 
 void StateAttributeName::enter() {
   token = "";
+//  printf("StateAttributeName::enter, token='%s'\n",token.c_str());
 }
 
 void StateAttributeName::consume(char c) {
   if (isspace(c)) return;
-  if ((c == '=') && (peekNextChar() == '"')) {
+  if ((c == '=') && (peekNextChar() == '\"')) {
     nextChar(); // consume "
     pContext->attrName = token;
     token = "";
@@ -839,11 +962,14 @@ void StateAttributeName::consume(char c) {
 
 void StateAttributeValue::enter() {
   token = "";
+//  printf("StateAttributeValue::enter, token='%s'\n",token.c_str());
+
 }
 
 void StateAttributeValue::consume(char c) {
   if (c=='"') {
     pContext->attrValue = token;
+//    printf("AddAttribute, %s\n", pContext->attrName.c_str());
     pContext->tagCurrent->addAttribute(pContext->attrName, pContext->attrValue);
     changeState(psTagAttributeName);
   } else {
@@ -866,6 +992,17 @@ void StateTagContent::consume(char c) {
   }
 }
 
+void StateTagDTDDocType::enter() {
+  token = "";
+}
+
+void StateTagDTDDocType::consume(char c) {
+  if (c == '>') {
+    token = "";
+    changeState(psConsume);
+  }
+}
+
 ParseStateClasses::ParseStateClasses(std::string _data, IParseEvents *pEventHandler)
 {
   stateConsume.pContext = this;
@@ -878,6 +1015,7 @@ ParseStateClasses::ParseStateClasses(std::string _data, IParseEvents *pEventHand
   stateAttributeName.pContext = this;
   stateAttributeValue.pContext = this;
   stateTagContent.pContext = this;
+  stateTagDTDDocType.pContext = this;
   pState = dynamic_cast<IParseState *>(&stateConsume);
 
   initialize(_data, pEventHandler);
@@ -895,6 +1033,7 @@ void ParseStateClasses::changeState(kParseState newState) {
     case psTagAttributeName   : pState = dynamic_cast<IParseState *>(&stateAttributeName); break;
     case psTagAttributeValue  : pState = dynamic_cast<IParseState *>(&stateAttributeValue); break;
     case psTagContent         : pState = dynamic_cast<IParseState *>(&stateTagContent); break;
+    case psDocType            : pState = dynamic_cast<IParseState *>(&stateTagDTDDocType); break;
     default : pState = NULL;
   }
   // State tracking variable managed by base class
